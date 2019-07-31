@@ -1,1 +1,1 @@
-# emcee_deemo
+# emcee_demo
