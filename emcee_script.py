@@ -6,11 +6,17 @@ import matplotlib as plt
 
 
 def model(x, params):
+    '''
+    This is an example model 'y = a*x + b' where a and b are parameters.
+    '''
     return params[0] * x + params[1]
 
 
 def lnprior_flat(params, params_range=[0, 1]):
-    # Parameters: P0, c500, alpha, beta
+    '''
+    The prior function is defined as flat whose boundary is defined with 
+    params_range.
+    '''
     params_range_ = params_range.copy()
     params_range_[1] = -params_range[1]
     if ((params - params_range[0])>0).sum() == params.size \
