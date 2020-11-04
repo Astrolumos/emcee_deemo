@@ -1,78 +1,123 @@
+# This file defines general log-likelihood class for MCMC fitting
+# and functions to setup and call emcee to conduct the fitting.
+
 import numpy as np
-import sys
 import emcee
-import corner
-import matplotlib as plt
+import yaml
 
 
-def model(x, params):
-    '''
-    This is an example model 'y = a*x + b' where a and b are parameters.
-    '''
-    return params[0] * x + params[1]
+class lnlikelihood:
 
+    '''This class defines the logarithmic likelihood used for MCMC;
+    fitting.  Inputs: data_x, data_y, cov: arrays; x, y and covmat of data; 
+    model: function, the model to be fit;
+    params_range: range of flat prior
+    paramsdict_free: dictionary of free parameters;
+    paramsfixed: values of fixed parameters;
+    paramsdict: dictionary of fixed parameters
 
-def lnprior_flat(params, params_range=[0, 1]):
     '''
-    The prior function is defined as flat whose boundary is defined with 
-    params_range.
-    '''
-    params_range_ = params_range.copy()
-    params_range_[1] = -params_range[1]
-    if ((params - params_range[0])>0).sum() == params.size \
-       and ((params - params_range[1])<0).sum() == params.size:
+
+    def __init__(self, data_x, data_y, cov, model, params_range,
+                 paramsdict_free, params_fixed=None, paramsdict_fixed=None):
+
+        self.data_x = data_x
+        self.data_y = data_y
+        self.model = model
+        self.cov = cov
+        self.params_range = params_range
+        self.nparams = params_range.shape[0]
+        self.params_fixed = params_fixed
+        self.paramsdict_fixed = paramsdict_fixed
+        self.paramsdict_free = paramsdict_free
+        self.invcov = np.linalg.inv(cov)
+
+    def lnprior(self, params):
+        for i, p in enumerate(params):
+            if not(self.params_range[i][0] <= p <= self.params_range[i][1]):
+                return -np.inf
+            else:
+                continue
         return 0
+
+    def lnposterior(self, params, **kwargs):
+
+        prior = self.lnprior(params)
+        if prior == -np.inf:
+            return prior
+
+
+        #model_y = self.model(self.data_x, params, self.paramsdict_free,
+        #                     self.params_fixed, self.paramsdict_fixed)
+        model_y = self.model(self.data_x, params)
+
+        if (model_y is None) or (self.cov is None):
+            return -np.inf
+        elif  (np.isnan(model_y).sum() != 0) or (np.isnan(self.cov).sum() != 0):
+            return -np.inf
+        else:
+
+            diff = model_y - self.data_y
+            chi2 = np.dot(np.dot(diff.T, self.invcov), diff)*0.5
+            if np.isnan(chi2):
+                return -np.inf                
+            if chi2 < 0:
+                return -np.inf
+            #print(chi2 / (self.data_x.size-len(params)))
+            return -chi2# - 0.5*np.linalg.slogdet(cov)[1]
+
+
+def mcmc_setup(filename):
+
+    '''
+    Reading the mcmc setup from a yaml file
+    '''
+    
+    paramsdict_free = np.array([])
+    params_range = np.array([])
+    params_0 = np.array([])
+    lsteps = np.array([])
+    params_range = np.array([0, 0])
+    paramsdict_fixed = np.array([])
+    params_fixed = np.array([])
+
+    with open(filename) as file:
+        documents = yaml.load(file)
+
+    for i, item in enumerate(documents['params']):
+        if item['vary'] is False:
+            paramsdict_fixed = np.append(paramsdict_fixed, item['name'])
+            params_fixed = np.append(params_fixed, item['value'])
+            continue
+        paramsdict_free = np.append(paramsdict_free, item['name'])
+        params_range = np.vstack([params_range, np.asarray(item['prior']['values'])])
+        params_0 = np.append(params_0, item['value'])
+        lsteps = np.append(lsteps, item['lsteps'])
+
+    params_range = params_range[1:]
+
+    print('Free parameters:' + str(paramsdict_free))
+    nsteps = documents['mcmc']['n_steps']
+    nwalkers = documents['mcmc']['n_walkers']
+    burnin = documents['mcmc']['burnin']
+    return nsteps, nwalkers, lsteps, burnin, paramsdict_free, params_0, params_range,\
+        paramsdict_fixed, params_fixed
+
+
+def runmcmc(params0, nstep, nwalkers, lstep, lnposterior, pool=None, burnin=None, thread=1, **kwargs):
+    ndim = params0.size
+    #sampler = emcee.EnsembleSampler(nwalkers, ndim, lnposterior, threads=60)
+    if pool is None:
+        sampler = emcee.EnsembleSampler(nwalkers, ndim, lnposterior, threads=thread)
     else:
-        return -np.inf
-
-
-def lnlikelihood(params, data_x, data_y, data_cov, params_range, model):
-
-    prior = lnprior_flat(params, params_range)
-    if prior == -np.inf:
-        return -np.inf
-    model = model(data_x, params)
-    inv_data_cov = np.linalg.inv(data_cov)
-    chi2 = np.dot(np.dot((data_y - model).T, inv_data_cov), (data_y - model))
-    sys.stdout.write(str(chi2))
-    sys.stdout.write('\n')
-    sys.stdout.flush()
-    return -chi2 * 0.5
-
-
-def emceeMCMC(params0, nstep, lstep, data_x, data_y, data_cov, params_range,
-              model, burnin=None):
-    ndim = len(params0)
-    nwalkers = 2 * ndim + 2
-    sampler = emcee.EnsembleSampler(nwalkers, ndim, lnlikelihood,
-                                    args=[data_x, data_y, data_cov,
-                                          params_range, model], threads=40)
+        sampler = emcee.EnsembleSampler(nwalkers, ndim, lnposterior, pool=pool)
     pos = [np.asarray(params0) + lstep * np.random.rand(ndim) for i in range(nwalkers)]
 
     if burnin is None:
-        pos, prob, state = sampler.run_mcmc(pos, nstep)
+        pos, prob, state = sampler.run_mcmc(pos, nstep, progress=True)
         return sampler.flatchain, sampler.flatlnprobability
     else:
-        pos, prob, stata = sampler.run_mcmc(pos, burnin)
+        pos, prob, stata = sampler.run_mcmc(pos, burnin, progress=True)
         sampler.reset()
-        pos, prob, state = sampler.run_mcmc(pos, nstep)
+        pos, prob, state = sampler.run_mcmc(pos, nstep, progress=True)
         return sampler.flatchain, sampler.flatlnprobability
-
-
-data_x = np.linspace(0, 10, 20)
-data_y_sample = np.zeros((50, 20))
-for i in range(50):
-    data_y_sample[i] = 2 * data_x + 3 + np.random.normal(size=20) * 2
-
-data_y = np.mean(data_y_sample, axis=0)
-data_cov = np.cov(data_y_sample.T)
-
-params_0 = [1, 1]
-params_range = np.array([[-0, -0], [10, 10]])
-nstep = 500
-lstep = 2
-
-param_sample, lnlklhd_chain = emceeMCMC(params_0, nstep, lstep, data_x, data_y,
-                                        data_cov, params_range, model)
-corner.corner(param_sample)
-plt.show()
