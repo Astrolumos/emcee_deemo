@@ -1,0 +1,30 @@
+# MCMC setup
+mcmc:
+    # Emcee parameters
+    n_walkers: 200
+    n_steps: 500
+    burnin: 20
+    # Save parameters (separated by whitespace)
+    save_par: False
+
+# Model parameters
+params:
+    # Each item here corresponds to one of the parameters
+    # used in our model
+    - name: "a"
+      label: r"$a$"
+      vary: True
+      value: 0.2
+      lsteps: 0.001       
+      prior:
+          type: "TopHat"
+          values: [0, 1]
+
+    - name: "b"
+      label: "$b$"
+      vary: True
+      value: 1
+      lsteps: 0.001
+      prior:
+          type: "TopHat"
+          values: [0,4]
